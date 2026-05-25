@@ -1,6 +1,8 @@
 # Foundry build artifacts
 cache/
 out/
+lib/
+broadcast/
 
 # IDE / Editor
 .idea/
@@ -16,4 +18,4 @@ Thumbs.db
 .env
 .env.*
 !.env.example
-
+logs.md

@@ -60,10 +60,21 @@ contract AuctionManager is Ownable, ReentrancyGuard {
     IERC20 public immutable usdc;
     PublishingRightsNFT public immutable nftContract;
 
-    /// @notice Oracle signer address for ECDSA verification.
+    /// @notice Oracle witness address for ECDSA signature verification.
+    /// @dev This is a regular Ethereum wallet address (0x...), NOT a URL or
+    /// contract. The oracle is a WITNESS — its matching private key signs
+    /// attestations off-chain (auctionId, winner, winningScore). The oracle
+    /// never sends on-chain transactions. Anyone can relay the signed
+    /// attestation; the contract verifies it against this public key via
+    /// ecrecover(). This address is the reference point of trust.
     address public oracleAddress;
 
-    /// @notice Backend operator allowed to set shortlists.
+    /// @notice Signer wallet — its private key (held off-chain) authorizes on-chain
+    /// writes. The contract checks msg.sender == this address to verify that
+    /// createAuction() and setShortlist() calls originate from the authorized backend.
+    /// @dev This is a regular Ethereum wallet address (0x...), NOT a URL or
+    /// contract. The private key lives off-chain with the backend server.
+    /// Generate one with: cast wallet new
     address public backendAddress;
 
     uint256 private _auctionCounter;
