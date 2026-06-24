@@ -2,7 +2,6 @@
 pragma solidity 0.8.19;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./PublishingRightsNFT.sol";
 import "./PredictionMarket.sol";
 
@@ -16,7 +15,6 @@ import "./PredictionMarket.sol";
 contract MarketFactory is Ownable {
     // ─── Storage ─────────────────────────────────────────────────────────────
 
-    IERC20 public immutable usdc;
     PublishingRightsNFT public immutable nftContract;
     address public oracleAddress;
     address public platformAddress;
@@ -46,26 +44,22 @@ contract MarketFactory is Ownable {
 
     /**
      * @param _nftContract     PublishingRightsNFT contract.
-     * @param _usdc            ERC-20 USDC token.
      * @param _oracleAddress   Oracle signer for ECDSA resolution.
      * @param _platformAddress Platform fee recipient.
      * @param _platformFeeBps  Platform fee share (basis points).
      */
     constructor(
         address _nftContract,
-        address _usdc,
         address _oracleAddress,
         address _platformAddress,
         uint256 _platformFeeBps
     ) {
         require(_nftContract != address(0), "Invalid NFT");
-        require(_usdc != address(0), "Invalid USDC");
         require(_oracleAddress != address(0), "Invalid oracle");
         require(_platformAddress != address(0), "Invalid platform");
         require(_platformFeeBps <= 10000, "BPS <= 10000");
 
-        nftContract = PublishingRightsNFT(_nftContract);
-        usdc = IERC20(_usdc);
+        nftContract = PublishingRightsNFT(payable(_nftContract));
         oracleAddress = _oracleAddress;
         platformAddress = _platformAddress;
         platformFeeBps = _platformFeeBps;
@@ -123,7 +117,6 @@ contract MarketFactory is Ownable {
             _options,
             _bettingDuration,
             _feeBps,
-            address(usdc),
             oracleAddress,
             platformAddress,
             platformFeeBps

@@ -3,8 +3,6 @@ pragma solidity 0.8.19;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "./PublishingRightsNFT.sol";
 
@@ -15,7 +13,7 @@ import "./PublishingRightsNFT.sol";
  * Lifecycle:
  *   BIDDING_OPEN → BIDDING_CLOSED → SHORTLIST_SET → COMPLETED
  *
- * 1. Users stake USDC and submit a proposal hash to bid for publishing rights.
+ * 1. Users stake native currency and submit a proposal hash to bid for publishing rights.
  * 2. After bidding closes, the off-chain backend runs AI filtering and
  *    deterministic scoring to produce a shortlist of ≤3 finalists.
  * 3. Experts evaluate finalists off-chain. The backend computes the median
@@ -24,11 +22,10 @@ import "./PublishingRightsNFT.sol";
  *    ECDSA signature, mints an ERC-721 PublishingRightsNFT to the winner,
  *    and transitions to COMPLETED.
  *
- * Non-winners can withdraw their staked USDC. The winner's stake stays in
- * the contract as payment for the publishing rights.
+ * Non-winners can withdraw their staked native currency. The winner's stake
+ * stays in the contract as payment for the publishing rights.
  */
 contract AuctionManager is Ownable, ReentrancyGuard {
-    using SafeERC20 for IERC20;
     using ECDSA for bytes32;
 
     // ─── Types ───────────────────────────────────────────────────────────────
@@ -57,7 +54,6 @@ contract AuctionManager is Ownable, ReentrancyGuard {
 
     // ─── Storage ─────────────────────────────────────────────────────────────
 
-    IERC20 public immutable usdc;
     PublishingRightsNFT public immutable nftContract;
 
     /// @notice Oracle witness address for ECDSA signature verification.
@@ -161,23 +157,19 @@ contract AuctionManager is Ownable, ReentrancyGuard {
 
     /**
      * @param _nftContract   Address of the PublishingRightsNFT contract.
-     * @param _usdc          Address of the ERC-20 USDC token.
      * @param _oracleAddress Initial oracle signer address.
      * @param _backendAddress Initial backend operator address.
      */
     constructor(
         address _nftContract,
-        address _usdc,
         address _oracleAddress,
         address _backendAddress
     ) {
         require(_nftContract != address(0), "Invalid NFT address");
-        require(_usdc != address(0), "Invalid USDC address");
         require(_oracleAddress != address(0), "Invalid oracle address");
         require(_backendAddress != address(0), "Invalid backend address");
 
-        nftContract = PublishingRightsNFT(_nftContract);
-        usdc = IERC20(_usdc);
+        nftContract = PublishingRightsNFT(payable(_nftContract));
         oracleAddress = _oracleAddress;
         backendAddress = _backendAddress;
     }
@@ -205,14 +197,15 @@ contract AuctionManager is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Owner withdraws accumulated winning bid USDC.
+     * @notice Owner withdraws accumulated winning bid native currency.
      */
     function withdrawWinningBids(address to) external onlyOwner nonReentrant {
         require(to != address(0), "Invalid recipient");
         uint256 amount = accumulatedWinningBids;
         require(amount > 0, "Nothing to withdraw");
         accumulatedWinningBids = 0;
-        usdc.safeTransfer(to, amount);
+        (bool sent, ) = payable(to).call{value: amount}("");
+        require(sent, "Transfer failed");
         emit WinningBidsWithdrawn(to, amount);
     }
 
@@ -253,19 +246,17 @@ contract AuctionManager is Ownable, ReentrancyGuard {
     // ─── Bidding ─────────────────────────────────────────────────────────────
 
     /**
-     * @notice Place a bid. Users must approve USDC spending first.
-     *         Bids are additive — multiple calls accumulate stake.
+     * @notice Place a bid. Bids are additive — multiple calls accumulate stake.
      *         The proposal hash should reference IPFS or similar storage.
      * @param auctionId    The auction to bid on.
-     * @param stakeAmount  USDC amount to stake (6 decimals).
      * @param proposalHash Hash/URI of the proposed question format.
      */
     function placeBid(
         uint256 auctionId,
-        uint256 stakeAmount,
         string calldata proposalHash
     )
         external
+        payable
         nonReentrant
         auctionExists(auctionId)
         inState(auctionId, AuctionState.BIDDING_OPEN)
@@ -273,11 +264,8 @@ contract AuctionManager is Ownable, ReentrancyGuard {
         Auction storage a = _auctions[auctionId];
 
         if (block.timestamp > a.biddingEndTime) revert BiddingNotOpen();
-        if (stakeAmount < a.minimumStake) revert StakeTooLow(a.minimumStake, stakeAmount);
+        if (msg.value < a.minimumStake) revert StakeTooLow(a.minimumStake, msg.value);
         if (bytes(proposalHash).length == 0) revert InvalidAuction();
-
-        // Transfer USDC from bidder to contract
-        usdc.safeTransferFrom(msg.sender, address(this), stakeAmount);
 
         uint256 previousStake = bidderStakes[auctionId][msg.sender];
 
@@ -286,12 +274,12 @@ contract AuctionManager is Ownable, ReentrancyGuard {
             a.bidders.push(msg.sender);
         }
 
-        bidderStakes[auctionId][msg.sender] = previousStake + stakeAmount;
+        bidderStakes[auctionId][msg.sender] = previousStake + msg.value;
 
         // Store proposal (last submission wins for proposal content)
         bidderProposals[auctionId][msg.sender] = proposalHash;
 
-        emit BidPlaced(auctionId, msg.sender, stakeAmount, proposalHash);
+        emit BidPlaced(auctionId, msg.sender, msg.value, proposalHash);
     }
 
     /**
@@ -426,7 +414,8 @@ contract AuctionManager is Ownable, ReentrancyGuard {
         bidderStakes[auctionId][msg.sender] = 0;
         stakeWithdrawn[auctionId][msg.sender] = true;
 
-        usdc.safeTransfer(msg.sender, amount);
+        (bool sent, ) = payable(msg.sender).call{value: amount}("");
+        require(sent, "Transfer failed");
         emit StakeWithdrawn(auctionId, msg.sender, amount);
     }
 

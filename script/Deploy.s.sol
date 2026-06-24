@@ -5,11 +5,14 @@ import "forge-std/Script.sol";
 import "../src/PublishingRightsNFT.sol";
 import "../src/AuctionManager.sol";
 import "../src/MarketFactory.sol";
-import "../test/helpers/MockUSDC.sol";
 
 /**
  * @title Deploy
  * @notice Deploys all Prediction Market Auction contracts to Arc Testnet.
+ *
+ * The system uses the native Arc currency for all application flows.
+ *
+ * For local development on Anvil, use forge test which handles funding automatically.
  *
  * Usage:
  *   source .env
@@ -27,25 +30,16 @@ contract Deploy is Script {
 
         vm.startBroadcast();
 
-        // 0. Deploy mock USDC token (6 decimals, used as currency for the system)
-        MockUSDC usdc = new MockUSDC();
-        console.log("MockUSDC deployed at:", address(usdc));
-
-        // Mint initial supply to deployer (for testing / funding bidders & bettors)
-        usdc.mint(msg.sender, 1_000_000_000_000_000); // 1B USDC
-
         // 1. Deploy PublishingRightsNFT
         PublishingRightsNFT nft = new PublishingRightsNFT(
             "PublishingRights",
-            "PUBR",
-            address(usdc)
+            "PUBR"
         );
         console.log("PublishingRightsNFT deployed at:", address(nft));
 
         // 2. Deploy AuctionManager
         AuctionManager auctionManager = new AuctionManager(
             address(nft),
-            address(usdc),
             oracleWitness,
             signer
         );
@@ -58,7 +52,6 @@ contract Deploy is Script {
         // 4. Deploy MarketFactory
         MarketFactory factory = new MarketFactory(
             address(nft),
-            address(usdc),
             oracleWitness,
             platformFeeRecipient,
             marketFactoryPlatformFeeBps
@@ -69,14 +62,9 @@ contract Deploy is Script {
         nft.addMinter(address(factory));
         console.log("MarketFactory added as minter");
 
-        // 6. Transfer NFT ownership to deployer (already owned by deployer)
-        //    or optionally transfer to a governance address.
-        // nft.transferOwnership(governanceAddress);
-
         vm.stopBroadcast();
 
         console.log("\n--- Deployment Summary ---");
-        console.log("MockUSDC:            ", address(usdc));
         console.log("PublishingRightsNFT:", address(nft));
         console.log("AuctionManager:     ", address(auctionManager));
         console.log("MarketFactory:      ", address(factory));

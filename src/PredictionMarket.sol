@@ -2,8 +2,6 @@
 pragma solidity 0.8.19;
 
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /**
@@ -11,10 +9,10 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
  * @notice Phase 2: Per-market prediction betting contract.
  *
  * Each market instance represents a single prediction market with a set of
- * outcome options. Users bet USDC on their chosen option. A fee is deducted
- * from each bet and added to the publisher's fee pool (claimed by the NFT
- * holder via PublishingRightsNFT). After the betting window closes, an
- * off-chain oracle resolves the outcome via an ECDSA-signed message.
+ * outcome options. Users bet native currency on their chosen option. A fee
+ * is deducted from each bet and added to the publisher's fee pool (claimed
+ * by the NFT holder via PublishingRightsNFT). After the betting window
+ * closes, an off-chain oracle resolves the outcome via an ECDSA-signed message.
  *
  * Winning bettors receive their stake plus a proportional share of losing bets.
  *
@@ -22,7 +20,6 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
  *   BETTING_OPEN → BETTING_CLOSED → RESOLVED → (COMPLETED)
  */
 contract PredictionMarket is ReentrancyGuard {
-    using SafeERC20 for IERC20;
     using ECDSA for bytes32;
 
     // ─── Types ───────────────────────────────────────────────────────────────
@@ -36,7 +33,6 @@ contract PredictionMarket is ReentrancyGuard {
 
     // ─── Immutable Storage ───────────────────────────────────────────────────
 
-    IERC20 public immutable usdc;
     address public immutable nftContract;
     uint256 public immutable tokenId;
     address public immutable oracleAddress;
@@ -58,7 +54,7 @@ contract PredictionMarket is ReentrancyGuard {
 
     // ─── Financial Tracking ──────────────────────────────────────────────────
 
-    uint256 public totalBetPool;             // Total USDC bet (after fee deduction)
+    uint256 public totalBetPool;             // Total native currency bet (after fee deduction)
     uint256 public totalFeePool;             // Accumulated publisher fees
     uint256 public totalWinningBets;         // Total bets on winning option
 
@@ -99,6 +95,8 @@ contract PredictionMarket is ReentrancyGuard {
     error NothingToClaim();
     error InvalidOracleSignature();
     error FeesAlreadyClaimed();
+    error UsePlaceBet();
+    error NoWinningBets();
 
     // ─── Modifiers ───────────────────────────────────────────────────────────
 
@@ -135,7 +133,6 @@ contract PredictionMarket is ReentrancyGuard {
      * @param _options         Array of outcome options.
      * @param _bettingDuration Duration of the betting window in seconds.
      * @param _feeBps          Publisher fee in basis points (e.g., 500 = 5%).
-     * @param _usdc            ERC-20 USDC token address.
      * @param _oracleAddress   Oracle signer for ECDSA resolution.
      * @param _platformAddress Platform fee recipient.
      * @param _platformFeeBps  Platform fee share from publisher fees (basis points).
@@ -147,7 +144,6 @@ contract PredictionMarket is ReentrancyGuard {
         string[] memory _options,
         uint256 _bettingDuration,
         uint256 _feeBps,
-        address _usdc,
         address _oracleAddress,
         address _platformAddress,
         uint256 _platformFeeBps
@@ -158,7 +154,6 @@ contract PredictionMarket is ReentrancyGuard {
         require(_options.length >= 2, "Need >= 2 options");
         require(_bettingDuration > 0, "Duration > 0");
         require(_feeBps <= 10000, "Fee BPS <= 10000");
-        require(_usdc != address(0), "Invalid USDC");
         require(_oracleAddress != address(0), "Invalid oracle");
         require(_platformAddress != address(0), "Invalid platform");
         require(_platformFeeBps <= 10000, "Platform BPS <= 10000");
@@ -168,7 +163,6 @@ contract PredictionMarket is ReentrancyGuard {
         oracleAddress = _oracleAddress;
         platformAddress = _platformAddress;
         platformFeeBps = _platformFeeBps;
-        usdc = IERC20(_usdc);
 
         _market.question = _question;
         for (uint256 i = 0; i < _options.length; i++) {
@@ -181,29 +175,38 @@ contract PredictionMarket is ReentrancyGuard {
         emit MarketCreated(_question, _options.length, _feeBps, _market.bettingEndTime);
     }
 
+    // ─── Receive / Fallback ──────────────────────────────────────────────────
+
+    /// @notice Reject plain ETH transfers. Users must call placeBet() instead.
+    receive() external payable {
+        revert UsePlaceBet();
+    }
+
+    /// @notice Reject calls with unmatched function selectors.
+    fallback() external payable {
+        revert UsePlaceBet();
+    }
+
     // ─── Betting ─────────────────────────────────────────────────────────────
 
     /**
-     * @notice Place a bet on an outcome option. Users must approve USDC first.
+     * @notice Place a bet on an outcome option.
      *         A fee is deducted (feeBps%) and added to the publisher's fee pool.
      * @param optionIndex Index of the outcome option to bet on (0-based).
-     * @param amount      Total USDC amount to wager (6 decimals).
      */
-    function placeBet(uint256 optionIndex, uint256 amount)
+    function placeBet(uint256 optionIndex)
         external
+        payable
         nonReentrant
         inState(MarketState.BETTING_OPEN)
     {
         if (block.timestamp > _market.bettingEndTime) revert BiddingClosed_();
         if (optionIndex >= _market.options.length) revert InvalidOptionIndex();
-        if (amount == 0) revert InvalidBetAmount();
+        if (msg.value == 0) revert InvalidBetAmount();
 
         // Calculate fee and bet portions
-        uint256 feeAmount = (amount * _market.feeBps) / 10000;
-        uint256 betAmount = amount - feeAmount;
-
-        // Transfer USDC from bettor to this contract
-        usdc.safeTransferFrom(msg.sender, address(this), amount);
+        uint256 feeAmount = (msg.value * _market.feeBps) / 10000;
+        uint256 betAmount = msg.value - feeAmount;
 
         // Track bets
         optionPoolAmounts[optionIndex] += betAmount;
@@ -297,7 +300,8 @@ contract PredictionMarket is ReentrancyGuard {
         // Reset user bet to prevent double-claim
         userBetAmounts[msg.sender][winningIdx] = 0;
 
-        usdc.safeTransfer(msg.sender, claimable);
+        (bool sent, ) = payable(msg.sender).call{value: claimable}("");
+        require(sent, "Transfer failed");
 
         emit WinningsClaimed(msg.sender, claimable);
 
@@ -328,15 +332,35 @@ contract PredictionMarket is ReentrancyGuard {
         uint256 publisherCut = feePool - platformCut;
 
         if (platformCut > 0) {
-            usdc.safeTransfer(platformAddress, platformCut);
+            (bool sentPlatform, ) = payable(platformAddress).call{value: platformCut}("");
+            require(sentPlatform, "Platform transfer failed");
         }
 
         // Send publisher portion to the NFT contract (which will forward to holder)
-        usdc.safeTransfer(msg.sender, publisherCut);
+        (bool sentPublisher, ) = payable(msg.sender).call{value: publisherCut}("");
+        require(sentPublisher, "Publisher transfer failed");
 
         emit PublisherFeesClaimed(msg.sender, publisherCut, platformCut);
 
         return publisherCut;
+    }
+
+    /**
+     * @notice Recover the bet pool if the winning option received zero bets.
+     *         Only callable when the market is RESOLVED and nobody can claim
+     *         winnings. Funds are sent to the platform address.
+     */
+    function recoverUnclaimedFunds()
+        external
+        nonReentrant
+        inState(MarketState.RESOLVED)
+    {
+        if (totalWinningBets > 0) revert NoWinningBets();
+        uint256 pool = totalBetPool;
+        if (pool == 0) revert NothingToClaim();
+        totalBetPool = 0;
+        (bool sent, ) = payable(platformAddress).call{value: pool}("");
+        require(sent, "Transfer failed");
     }
 
     // ─── View Functions ──────────────────────────────────────────────────────

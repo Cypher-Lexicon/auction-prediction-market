@@ -4,8 +4,7 @@ pragma solidity 0.8.19;
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+
 
 /**
  * @title PublishingRightsNFT
@@ -19,7 +18,6 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
  * Tokens are transferable, enabling a secondary market for publishing rights.
  */
 contract PublishingRightsNFT is ERC721, Ownable, ReentrancyGuard {
-    using SafeERC20 for IERC20;
 
     // ─── Types ───────────────────────────────────────────────────────────────
 
@@ -31,8 +29,6 @@ contract PublishingRightsNFT is ERC721, Ownable, ReentrancyGuard {
     }
 
     // ─── Storage ─────────────────────────────────────────────────────────────
-
-    IERC20 public immutable usdc;
 
     uint256 private _tokenIdCounter;
 
@@ -84,16 +80,16 @@ contract PublishingRightsNFT is ERC721, Ownable, ReentrancyGuard {
     /**
      * @param name_  ERC-721 collection name.
      * @param symbol_ ERC-721 collection symbol.
-     * @param _usdc  Address of the ERC-20 USDC token on Arc Testnet.
      */
     constructor(
         string memory name_,
-        string memory symbol_,
-        address _usdc
-    ) ERC721(name_, symbol_) Ownable() {
-        require(_usdc != address(0), "Invalid USDC address");
-        usdc = IERC20(_usdc);
-    }
+        string memory symbol_
+    ) ERC721(name_, symbol_) Ownable() {}
+
+    // ─── Receive ────────────────────────────────────────────────────────────
+
+    /// @notice Accept native currency forwarded from PredictionMarket.claimPublisherFees().
+    receive() external payable {}
 
     // ─── Minter Management ───────────────────────────────────────────────────
 
@@ -188,7 +184,7 @@ contract PublishingRightsNFT is ERC721, Ownable, ReentrancyGuard {
      * @notice Claim publisher fees from the linked prediction market.
      *         Only the current token owner can claim.
      * @param tokenId The publishing rights token ID.
-     * @return amount The amount of USDC claimed.
+     * @return amount The amount of native currency claimed.
      */
     function claimFees(uint256 tokenId)
         external
@@ -202,7 +198,7 @@ contract PublishingRightsNFT is ERC721, Ownable, ReentrancyGuard {
         if (market == address(0)) revert NoMarketLinked();
 
         // Call the prediction market's fee claim function.
-        // The market will send USDC to this contract.
+        // The market will send native currency to this contract.
         (bool success, bytes memory data) = market.call(
             abi.encodeWithSignature("claimPublisherFees()")
         );
@@ -211,8 +207,9 @@ contract PublishingRightsNFT is ERC721, Ownable, ReentrancyGuard {
         uint256 amount = abi.decode(data, (uint256));
         if (amount == 0) revert NoFeesToClaim();
 
-        // Forward USDC to the token owner
-        usdc.safeTransfer(msg.sender, amount);
+        // Forward native currency to the token owner
+        (bool sent, ) = payable(msg.sender).call{value: amount}("");
+        require(sent, "Transfer failed");
 
         emit FeesClaimed(tokenId, msg.sender, amount);
 

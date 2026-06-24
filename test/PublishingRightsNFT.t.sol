@@ -3,11 +3,9 @@ pragma solidity 0.8.19;
 
 import "forge-std/Test.sol";
 import "../src/PublishingRightsNFT.sol";
-import "./helpers/MockUSDC.sol";
 
 contract PublishingRightsNFTTest is Test {
     PublishingRightsNFT public nft;
-    MockUSDC public usdc;
 
     address public owner = address(1);
     address public minter = address(2);
@@ -16,9 +14,7 @@ contract PublishingRightsNFTTest is Test {
 
     function setUp() public {
         vm.prank(owner);
-        usdc = new MockUSDC();
-        vm.prank(owner);
-        nft = new PublishingRightsNFT("PublishingRights", "PUBR", address(usdc));
+        nft = new PublishingRightsNFT("PublishingRights", "PUBR");
     }
 
     // ─── Constructor & Minting ──────────────────────────────────────────────

@@ -20,7 +20,7 @@
 
 ## 1. Architecture Overview
 
-The system has **5 contracts** working in two sequential phases:
+The system has **4 contracts** working in two sequential phases:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -31,9 +31,9 @@ The system has **5 contracts** working in two sequential phases:
 │   auctions)     shortlist,          minted to winner)      │
 │                 resolution)                                │
 │                                                           │
-│  Bidders stake USDC, submit proposals. Backend runs AI    │
-│  filtering + expert evaluation. Oracle signs the winner.  │
-│  Winner gets an NFT. Non-winners withdraw stakes.         │
+│  Bidders stake native currency and submit proposals. Backend runs AI     │
+│  filtering + expert evaluation. Oracle signs the winner.                  │
+│  Winner gets an NFT. Non-winners withdraw stakes.                         │
 └─────────────────────────────────────────────────────────┘
                             │
                             ▼
@@ -44,19 +44,18 @@ The system has **5 contracts** working in two sequential phases:
 │  (owns token)   (deploys market   (betting, resolution,   │
 │                  per token)        fee distribution)       │
 │                                                           │
-│  Bettors wager USDC on outcomes. Publisher earns fees.    │
-│  Oracle resolves. Winners claim proportional payouts.     │
-│  Publisher claims accumulated fees via the NFT contract.  │
+│  Bettors wager native currency on outcomes. Publisher earns fees.         │
+│  Oracle resolves. Winners claim proportional payouts.                     │
+│  Publisher claims accumulated fees via the NFT contract.                  │
 └─────────────────────────────────────────────────────────┘
 ```
 
-| Contract | File | Role | Deployed by |
-|---|---|---|---|
-| `MockUSDC` | `test/helpers/MockUSDC.sol` | Simple ERC-20 token (6 decimals). Deployed automatically by the deploy script as our test currency. The deployer receives the initial supply of 1B tokens to fund bidders and bettors. | Deploy script |
-| `PublishingRightsNFT` | `src/PublishingRightsNFT.sol` | ERC-721 token representing publishing rights. Minted to auction winners. | Deploy script |
-| `AuctionManager` | `src/AuctionManager.sol` | Manages Phase 1 auctions: bidding, shortlist, oracle resolution. | Deploy script |
-| `MarketFactory` | `src/MarketFactory.sol` | Deploys `PredictionMarket` instances. One market per NFT token. | Deploy script |
-| `PredictionMarket` | `src/PredictionMarket.sol` | Per-market betting contract with parimutuel payouts and publisher fees. | MarketFactory |
+| Contract | File | Role |
+|---|---|---|
+| `PublishingRightsNFT` | `src/PublishingRightsNFT.sol` | ERC-721 token representing publishing rights. Minted to auction winners. |
+| `AuctionManager` | `src/AuctionManager.sol` | Manages Phase 1 auctions: bidding, shortlist, oracle resolution. |
+| `MarketFactory` | `src/MarketFactory.sol` | Deploys `PredictionMarket` instances. One market per NFT token. |
+| `PredictionMarket` | `src/PredictionMarket.sol` | Per-market betting contract with parimutuel payouts and publisher fees. |
 
 ---
 
@@ -64,7 +63,7 @@ The system has **5 contracts** working in two sequential phases:
 
 - **[Foundry](https://book.getfoundry.sh/getting-started/installation)** (Forge, Cast, Anvil)
 - **Git**
-- **A wallet with Arc Testnet ETH** (for gas)
+- **A wallet with Arc Testnet native USDC** — USDC is the gas currency. Get testnet USDC from the Arc faucet.
 - **Arc Testnet RPC URL** — register at the network's faucet / docs
 
 Verify your installation:
@@ -134,84 +133,47 @@ cp .env.example .env
 | Variable | I/O | Used by contract(s) | What it is |
 |---|---|---|---|
 | `ARC_TESTNET_RPC_URL` | INPUT | (network) | HTTP RPC endpoint for Arc Testnet |
-| `DEPLOYER_PRIVATE_KEY` | INPUT | (deployer wallet) | Private key that pays gas. Needs testnet ETH. |
+| `DEPLOYER_PRIVATE_KEY` | INPUT | (deployer wallet) | Private key that pays gas. Needs testnet USDC. |
 | `ORACLE_WITNESS_ADDRESS` | INPUT | **AuctionManager** + **MarketFactory** | Public key of the oracle witness. Its matching private key signs resolution attestations off-chain. The oracle never sends txs. |
 | `SIGNER_ADDRESS` | INPUT | **AuctionManager** | Public key whose matching private key (held off-chain) signs on-chain write transactions (`createAuction`, `setShortlist`). |
 | `PLATFORM_FEE_RECIPIENT` | INPUT | **MarketFactory** | Wallet that receives the platform's fee cut from publisher fees. |
 | `MARKET_FACTORY_PLATFORM_FEE_BPS` | INPUT | **MarketFactory** | Platform fee in basis points (1000 = 10%). |
 | `ETHERSCAN_API_KEY` | INPUT | (verification) | ArcScan API key for `forge verify-contract`. |
-| `MOCK_USDC_ADDRESS` | **OUTPUT** | All contracts | Deployed by the script — the test ERC-20 currency. |
 | *(no env var)* | **OUTPUT** | **PublishingRightsNFT** | `0x...` — printed to console after deploy. |
 | *(no env var)* | **OUTPUT** | **AuctionManager** | `0x...` — printed to console after deploy. |
 | *(no env var)* | **OUTPUT** | **MarketFactory** | `0x...` — printed to console after deploy. |
 
-### Where the USDC token comes from
+### Native Currency
 
-There is **no external `USDC_TOKEN_ADDRESS` env variable**. The deploy script deploys
-its own MockUSDC token as step 0. This token:
-
-- Has **6 decimal places**: `1000000` = 1.00 USDC, `100000000` = 100.00 USDC
-- Mints **1 billion tokens** to the deployer on deployment (for funding bidders/bettors)
-- Is a plain ERC-20 — anyone can call `transfer()` and contracts pull via `transferFrom()` after `approve()`
-
-#### It's an intermediary, not a faucet
+The system uses the **native Arc testnet currency** (USDC) for all on-chain value flows.
+This is the same currency used for gas — no separate ERC-20 token contract is needed.
 
 ```
-  Bidder's wallet                    USDC contract                    AuctionManager
-  (holds USDC)                        (MockUSDC)                        (contract)
-       │                                   │                               │
-       │  approve(AuctionManager, 100)     │                               │
-       │──────────────────────────────────►│  "let AuctionManager           │
-       │                                   │   pull up to 100 from me"     │
-       │                                   │                               │
-       │     placeBid(100)                 │                               │
-       │───────────────────────────────────────────────────────────────────►│
-       │                                   │                               │
-       │          safeTransferFrom(bidder, auctionManager, 100)            │
-       │                                   │◄──────────────────────────────│
-       │                                   │                               │
-       │◄────── debit 100 ────────────────►│────── credit 100 ────────────►│
-       │                                   │                               │
-  Bidder loses 100 USDC              Token ledger updated          AuctionManager gains 100 USDC
+Native Arc currency (USDC)
+    │
+    ├── Gas: every cast send / forge script needs USDC for tx fees
+    │
+    └── Application: bids, stakes, bets, payouts, fees all use msg.value / call{value}
 ```
 
-In short:
+#### How it works in the code
 
-```
-MockUSDC contract                     →  the money (holds all funds, moves them on command)
-AuctionManager / PredictionMarket     →  the logic (rules, state machines, access control)
-```
+Every incoming value comes via `msg.value`:
 
-#### Critical: users must `approve()` first
-
-USDC is an ERC-20 token. Before any contract can pull USDC from a user's wallet,
-the user must call `approve(spender, amount)` on the USDC contract itself:
-
-```shell
-# Approve AuctionManager to spend your USDC (for bidding)
-cast send <MOCK_USDC_ADDRESS> "approve(address,uint256)" <AUCTION_MANAGER_ADDRESS> 200000000 \
-  --rpc-url arc_testnet --private-key "$YOUR_PRIVATE_KEY"
-
-# Approve PredictionMarket to spend your USDC (for betting)
-cast send <MOCK_USDC_ADDRESS> "approve(address,uint256)" <MARKET_ADDRESS> 1000000000 \
-  --rpc-url arc_testnet --private-key "$YOUR_PRIVATE_KEY"
+```solidity
+// Receiving a bid stake
+require(msg.value >= a.minimumStake, "Stake too low");
 ```
 
-Without approval, `placeBid()` and `placeBet()` will revert.
+Every outgoing value uses `call{value}`:
 
-#### Distributing tokens to users
-
-The deploy script mints 1B tokens to the deployer. To send tokens to bidders/bettors:
-
-```shell
-# Deployer transfers USDC to a user
-cast send <MOCK_USDC_ADDRESS> "transfer(address,uint256)" <USER_ADDRESS> 100000000000 \
-  --rpc-url arc_testnet --private-key "$DEPLOYER_PRIVATE_KEY"
-
-# Or mint directly (MockUSDC owner only, works since deployer owns the contract)
-cast send <MOCK_USDC_ADDRESS> "mint(address,uint256)" <USER_ADDRESS> 100000000000 \
-  --rpc-url arc_testnet --private-key "$DEPLOYER_PRIVATE_KEY"
+```solidity
+// Sending funds to a user
+(bool sent, ) = payable(msg.sender).call{value: amount}("");
+require(sent, "Transfer failed");
 ```
+
+No `approve()` is needed — users just send native value with their transaction.
 
 ### What "ORACLE_WITNESS_ADDRESS" actually means
 
@@ -318,7 +280,7 @@ source .env
 
 ## 6. Deploy to Arc Testnet
 
-The deployment script is at `script/Deploy.s.sol`. It deploys all 5 contracts and configures minter roles.
+The deployment script is at `script/Deploy.s.sol`. It deploys all 3 contracts in order and configures minter roles. The contracts use native Arc currency — no external token address is needed.
 
 ### Dry-run first (simulate without spending gas)
 
@@ -329,7 +291,6 @@ forge script script/Deploy.s.sol \
 ```
 
 Review the output to confirm the deployment sequence:
-0. `MockUSDC` deployed, 1B tokens minted to deployer
 1. `PublishingRightsNFT` deployed
 2. `AuctionManager` deployed
 3. `AuctionManager` granted minter role on NFT
@@ -349,7 +310,6 @@ Save the contract addresses printed in the console output:
 
 ```
 --- Deployment Summary ---
-MockUSDC:            0x...    ← OUTPUT
 PublishingRightsNFT: 0x...    ← OUTPUT  (PUBLISHING_RIGHTS_NFT_ADDRESS)
 AuctionManager:      0x...    ← OUTPUT  (AUCTION_MANAGER_ADDRESS)
 MarketFactory:       0x...    ← OUTPUT  (MARKET_FACTORY_ADDRESS)
@@ -402,21 +362,21 @@ Verify all contracts for transparency and easier interaction via block explorer:
 forge verify-contract <NFT_ADDRESS> src/PublishingRightsNFT.sol:PublishingRightsNFT \
   --rpc-url arc_testnet \
   --etherscan-api-key "$ETHERSCAN_API_KEY" \
-  --constructor-args $(cast abi-encode "constructor(string,string,address)" "PublishingRights" "PUBR" "$MOCK_USDC_ADDRESS")
+  --constructor-args $(cast abi-encode "constructor(string,string)" "PublishingRights" "PUBR")
 
 # Verify AuctionManager
 forge verify-contract <AUCTION_MANAGER_ADDRESS> src/AuctionManager.sol:AuctionManager \
   --rpc-url arc_testnet \
   --etherscan-api-key "$ETHERSCAN_API_KEY" \
-  --constructor-args $(cast abi-encode "constructor(address,address,address,address)" \
-    "$NFT_ADDRESS" "$MOCK_USDC_ADDRESS" "$ORACLE_WITNESS_ADDRESS" "$SIGNER_ADDRESS")
+  --constructor-args $(cast abi-encode "constructor(address,address,address)" \
+    "$NFT_ADDRESS" "$ORACLE_WITNESS_ADDRESS" "$SIGNER_ADDRESS")
 
 # Verify MarketFactory
 forge verify-contract <MARKET_FACTORY_ADDRESS> src/MarketFactory.sol:MarketFactory \
   --rpc-url arc_testnet \
   --etherscan-api-key "$ETHERSCAN_API_KEY" \
-  --constructor-args $(cast abi-encode "constructor(address,address,address,address,uint256)" \
-    "$NFT_ADDRESS" "$MOCK_USDC_ADDRESS" "$ORACLE_WITNESS_ADDRESS" "$PLATFORM_FEE_RECIPIENT" "$MARKET_FACTORY_PLATFORM_FEE_BPS")
+  --constructor-args $(cast abi-encode "constructor(address,address,address,uint256)" \
+    "$NFT_ADDRESS" "$ORACLE_WITNESS_ADDRESS" "$PLATFORM_FEE_RECIPIENT" "$MARKET_FACTORY_PLATFORM_FEE_BPS")
 ```
 
 ---
@@ -462,25 +422,19 @@ cast send <AUCTION_MANAGER_ADDRESS> \
 ```
 
 - `"QHASH_news_item_001"` — question identifier
-- `100000000` — minimum stake (100 USDC, 6 decimals)
+- `100000000` — minimum stake in wei (100 native Arc USDC, same as 100 USDC with 6 decimals)
 - `86400` — bidding duration (1 day in seconds)
 
 Returns the `auctionId`.
 
-**2. Bidders place bids (must approve USDC first)**
+**2. Bidders place bids (send native value)**
 
 ```shell
-# Approve USDC spending
-cast send <USDC_ADDRESS> \
-  "approve(address,uint256)" \
-  <AUCTION_MANAGER_ADDRESS> 200000000 \
-  --rpc-url arc_testnet \
-  --private-key "$BIDDER_PRIVATE_KEY"
-
-# Place bid
+# Place bid — send native value directly (no approve needed)
 cast send <AUCTION_MANAGER_ADDRESS> \
-  "placeBid(uint256,uint256,string)" \
-  1 200000000 "ipfs://QmProposalHash" \
+  "placeBid(uint256,string)" \
+  1 "ipfs://QmProposalHash" \
+  --value 200000000 \
   --rpc-url arc_testnet \
   --private-key "$BIDDER_PRIVATE_KEY"
 ```
@@ -575,20 +529,14 @@ cast send <MARKET_FACTORY_ADDRESS> \
 
 Returns the `PredictionMarket` address. Save it.
 
-**2. Bettors place bets (must approve USDC first)**
+**2. Bettors place bets (send native value)**
 
 ```shell
-# Approve USDC
-cast send <USDC_ADDRESS> \
-  "approve(address,uint256)" \
-  <MARKET_ADDRESS> 1000000000 \
-  --rpc-url arc_testnet \
-  --private-key "$BETTOR_PRIVATE_KEY"
-
-# Bet on option 0 ("Yes")
+# Bet on option 0 ("Yes") — send native value directly (no approve needed)
 cast send <MARKET_ADDRESS> \
-  "placeBet(uint256,uint256)" \
-  0 1000000000 \
+  "placeBet(uint256)" \
+  0 \
+  --value 1000000000 \
   --rpc-url arc_testnet \
   --private-key "$BETTOR_PRIVATE_KEY"
 ```

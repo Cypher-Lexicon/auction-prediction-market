@@ -4,13 +4,11 @@ pragma solidity 0.8.19;
 import "forge-std/Test.sol";
 import "../src/PublishingRightsNFT.sol";
 import "../src/AuctionManager.sol";
-import "./helpers/MockUSDC.sol";
 import "./helpers/SigUtils.sol";
 
 contract AuctionManagerTest is Test, SigUtils {
     PublishingRightsNFT public nft;
     AuctionManager public auctionManager;
-    MockUSDC public usdc;
 
     address public owner = makeAddr("owner");
     address public backend = makeAddr("backend");
@@ -31,28 +29,25 @@ contract AuctionManagerTest is Test, SigUtils {
         oracle = vm.addr(oracleKey);
 
         vm.startPrank(owner);
-        usdc = new MockUSDC();
-        nft = new PublishingRightsNFT("PublishingRights", "PUBR", address(usdc));
+        nft = new PublishingRightsNFT("PublishingRights", "PUBR");
         auctionManager = new AuctionManager(
             address(nft),
-            address(usdc),
             oracle,
             backend
         );
         nft.addMinter(address(auctionManager));
         vm.stopPrank();
 
-        // Fund bidders with USDC
-        usdc.mint(bidder1, 10000 * 1e6);
-        usdc.mint(bidder2, 10000 * 1e6);
-        usdc.mint(bidder3, 10000 * 1e6);
-        usdc.mint(bidder4, 10000 * 1e6);
+        // Fund bidders with native currency
+        vm.deal(bidder1, 10000 * 1e6);
+        vm.deal(bidder2, 10000 * 1e6);
+        vm.deal(bidder3, 10000 * 1e6);
+        vm.deal(bidder4, 10000 * 1e6);
     }
 
     // ─── Constructor & Admin ────────────────────────────────────────────────
 
     function testConstructor() public {
-        assertEq(address(auctionManager.usdc()), address(usdc));
         assertEq(address(auctionManager.nftContract()), address(nft));
         assertEq(auctionManager.oracleAddress(), oracle);
         assertEq(auctionManager.backendAddress(), backend);
@@ -123,9 +118,7 @@ contract AuctionManagerTest is Test, SigUtils {
 
         uint256 stake = 200 * 1e6;
         vm.prank(bidder1);
-        usdc.approve(address(auctionManager), stake);
-        vm.prank(bidder1);
-        auctionManager.placeBid(auctionId, stake, "ipfs://proposal1");
+        auctionManager.placeBid{value: stake}(auctionId, "ipfs://proposal1");
 
         assertEq(auctionManager.bidderStakes(auctionId, bidder1), stake);
 
@@ -137,9 +130,8 @@ contract AuctionManagerTest is Test, SigUtils {
         uint256 auctionId = _createAuction();
 
         vm.startPrank(bidder1);
-        usdc.approve(address(auctionManager), 500 * 1e6);
-        auctionManager.placeBid(auctionId, 200 * 1e6, "ipfs://proposal1");
-        auctionManager.placeBid(auctionId, 100 * 1e6, "ipfs://proposal1v2");
+        auctionManager.placeBid{value: 200 * 1e6}(auctionId, "ipfs://proposal1");
+        auctionManager.placeBid{value: 100 * 1e6}(auctionId, "ipfs://proposal1v2");
         vm.stopPrank();
 
         assertEq(auctionManager.bidderStakes(auctionId, bidder1), 300 * 1e6);
@@ -149,12 +141,10 @@ contract AuctionManagerTest is Test, SigUtils {
         uint256 auctionId = _createAuction();
 
         vm.prank(bidder1);
-        usdc.approve(address(auctionManager), 50 * 1e6);
-        vm.prank(bidder1);
         vm.expectRevert(
             abi.encodeWithSelector(AuctionManager.StakeTooLow.selector, MINIMUM_STAKE, 50 * 1e6)
         );
-        auctionManager.placeBid(auctionId, 50 * 1e6, "proposal");
+        auctionManager.placeBid{value: 50 * 1e6}(auctionId, "proposal");
     }
 
     function testPlaceBidAfterEnd() public {
@@ -163,29 +153,21 @@ contract AuctionManagerTest is Test, SigUtils {
         vm.warp(block.timestamp + BID_DURATION + 1);
 
         vm.prank(bidder1);
-        usdc.approve(address(auctionManager), MINIMUM_STAKE);
-        vm.prank(bidder1);
         vm.expectRevert(AuctionManager.BiddingNotOpen.selector);
-        auctionManager.placeBid(auctionId, MINIMUM_STAKE, "proposal");
+        auctionManager.placeBid{value: MINIMUM_STAKE}(auctionId, "proposal");
     }
 
     function testMultipleBidders() public {
         uint256 auctionId = _createAuction();
 
         vm.prank(bidder1);
-        usdc.approve(address(auctionManager), 200 * 1e6);
-        vm.prank(bidder1);
-        auctionManager.placeBid(auctionId, 200 * 1e6, "proposal1");
+        auctionManager.placeBid{value: 200 * 1e6}(auctionId, "proposal1");
 
         vm.prank(bidder2);
-        usdc.approve(address(auctionManager), 300 * 1e6);
-        vm.prank(bidder2);
-        auctionManager.placeBid(auctionId, 300 * 1e6, "proposal2");
+        auctionManager.placeBid{value: 300 * 1e6}(auctionId, "proposal2");
 
         vm.prank(bidder3);
-        usdc.approve(address(auctionManager), 150 * 1e6);
-        vm.prank(bidder3);
-        auctionManager.placeBid(auctionId, 150 * 1e6, "proposal3");
+        auctionManager.placeBid{value: 150 * 1e6}(auctionId, "proposal3");
 
         address[] memory bidders = auctionManager.getBidders(auctionId);
         assertEq(bidders.length, 3);
@@ -197,9 +179,7 @@ contract AuctionManagerTest is Test, SigUtils {
         uint256 auctionId = _createAuction();
 
         vm.prank(bidder1);
-        usdc.approve(address(auctionManager), MINIMUM_STAKE);
-        vm.prank(bidder1);
-        auctionManager.placeBid(auctionId, MINIMUM_STAKE, "proposal1");
+        auctionManager.placeBid{value: MINIMUM_STAKE}(auctionId, "proposal1");
 
         vm.warp(block.timestamp + BID_DURATION + 1);
 
@@ -216,9 +196,7 @@ contract AuctionManagerTest is Test, SigUtils {
         uint256 auctionId = _createAuction();
 
         vm.prank(bidder1);
-        usdc.approve(address(auctionManager), MINIMUM_STAKE);
-        vm.prank(bidder1);
-        auctionManager.placeBid(auctionId, MINIMUM_STAKE, "proposal1");
+        auctionManager.placeBid{value: MINIMUM_STAKE}(auctionId, "proposal1");
 
         vm.prank(bidder2);
         vm.expectRevert(AuctionManager.BiddingNotOpen.selector);
@@ -237,19 +215,13 @@ contract AuctionManagerTest is Test, SigUtils {
 
     function _setupBiddingClosed(uint256 auctionId) internal {
         vm.prank(bidder1);
-        usdc.approve(address(auctionManager), 200 * 1e6);
-        vm.prank(bidder1);
-        auctionManager.placeBid(auctionId, 200 * 1e6, "proposal1");
+        auctionManager.placeBid{value: 200 * 1e6}(auctionId, "proposal1");
 
         vm.prank(bidder2);
-        usdc.approve(address(auctionManager), 300 * 1e6);
-        vm.prank(bidder2);
-        auctionManager.placeBid(auctionId, 300 * 1e6, "proposal2");
+        auctionManager.placeBid{value: 300 * 1e6}(auctionId, "proposal2");
 
         vm.prank(bidder3);
-        usdc.approve(address(auctionManager), 150 * 1e6);
-        vm.prank(bidder3);
-        auctionManager.placeBid(auctionId, 150 * 1e6, "proposal3");
+        auctionManager.placeBid{value: 150 * 1e6}(auctionId, "proposal3");
 
         vm.warp(block.timestamp + BID_DURATION + 1);
         auctionManager.closeBidding(auctionId);
@@ -417,10 +389,10 @@ contract AuctionManagerTest is Test, SigUtils {
         auctionManager.resolveAuction(auctionId, bidder1, 9200, "metadata", sig);
 
         // bidder2 (non-winner, shortlisted) should be able to withdraw
-        uint256 balanceBefore = usdc.balanceOf(bidder2);
+        uint256 balanceBefore = bidder2.balance;
         vm.prank(bidder2);
         auctionManager.withdrawStake(auctionId);
-        uint256 balanceAfter = usdc.balanceOf(bidder2);
+        uint256 balanceAfter = bidder2.balance;
 
         assertGt(balanceAfter, balanceBefore);
         assertEq(balanceAfter - balanceBefore, 300 * 1e6); // bidder2 staked 300
@@ -471,10 +443,10 @@ contract AuctionManagerTest is Test, SigUtils {
         bytes memory sig = signAuctionResolution(auctionId, bidder1, 9200, oracleKey);
         auctionManager.resolveAuction(auctionId, bidder1, 9200, "metadata", sig);
 
-        uint256 balanceBefore = usdc.balanceOf(owner);
+        uint256 balanceBefore = owner.balance;
         vm.prank(owner);
         auctionManager.withdrawWinningBids(owner);
-        uint256 balanceAfter = usdc.balanceOf(owner);
+        uint256 balanceAfter = owner.balance;
 
         assertEq(balanceAfter - balanceBefore, 200 * 1e6);
         assertEq(auctionManager.accumulatedWinningBids(), 0);
@@ -489,19 +461,13 @@ contract AuctionManagerTest is Test, SigUtils {
 
         // 2. Bidders submit
         vm.prank(bidder1);
-        usdc.approve(address(auctionManager), 200 * 1e6);
-        vm.prank(bidder1);
-        auctionManager.placeBid(auctionId, 200 * 1e6, "ipfs://proposal1");
+        auctionManager.placeBid{value: 200 * 1e6}(auctionId, "ipfs://proposal1");
 
         vm.prank(bidder2);
-        usdc.approve(address(auctionManager), 300 * 1e6);
-        vm.prank(bidder2);
-        auctionManager.placeBid(auctionId, 300 * 1e6, "ipfs://proposal2");
+        auctionManager.placeBid{value: 300 * 1e6}(auctionId, "ipfs://proposal2");
 
         vm.prank(bidder3);
-        usdc.approve(address(auctionManager), 150 * 1e6);
-        vm.prank(bidder3);
-        auctionManager.placeBid(auctionId, 150 * 1e6, "ipfs://proposal3");
+        auctionManager.placeBid{value: 150 * 1e6}(auctionId, "ipfs://proposal3");
 
         // 3. Close bidding
         vm.warp(block.timestamp + BID_DURATION + 1);

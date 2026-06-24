@@ -6,14 +6,12 @@ import "../src/PublishingRightsNFT.sol";
 import "../src/AuctionManager.sol";
 import "../src/MarketFactory.sol";
 import "../src/PredictionMarket.sol";
-import "./helpers/MockUSDC.sol";
 import "./helpers/SigUtils.sol";
 
 contract PredictionMarketTest is Test, SigUtils {
     PublishingRightsNFT public nft;
     AuctionManager public auctionManager;
     MarketFactory public factory;
-    MockUSDC public usdc;
     PredictionMarket public market;
 
     address public owner = makeAddr("owner");
@@ -39,11 +37,10 @@ contract PredictionMarketTest is Test, SigUtils {
         oracle = vm.addr(oracleKey);
 
         vm.startPrank(owner);
-        usdc = new MockUSDC();
-        nft = new PublishingRightsNFT("PublishingRights", "PUBR", address(usdc));
-        auctionManager = new AuctionManager(address(nft), address(usdc), oracle, backend);
+        nft = new PublishingRightsNFT("PublishingRights", "PUBR");
+        auctionManager = new AuctionManager(address(nft), oracle, backend);
         nft.addMinter(address(auctionManager));
-        factory = new MarketFactory(address(nft), address(usdc), oracle, platform, PLATFORM_FEE_BPS);
+        factory = new MarketFactory(address(nft), oracle, platform, PLATFORM_FEE_BPS);
         nft.addMinter(address(factory));
         vm.stopPrank();
 
@@ -52,19 +49,15 @@ contract PredictionMarketTest is Test, SigUtils {
         vm.prank(backend);
         uint256 auctionId = auctionManager.createAuction("QHASH", 100 * 1e6, 1 days);
 
-        usdc.mint(publisher, 1000 * 1e6);
+        vm.deal(publisher, 1000 * 1e6);
         vm.prank(publisher);
-        usdc.approve(address(auctionManager), 200 * 1e6);
-        vm.prank(publisher);
-        auctionManager.placeBid(auctionId, 200 * 1e6, "proposal");
+        auctionManager.placeBid{value: 200 * 1e6}(auctionId, "proposal");
 
         // Also add another bidder so we can close
         address extraBidder = makeAddr("extra");
-        usdc.mint(extraBidder, 1000 * 1e6);
+        vm.deal(extraBidder, 1000 * 1e6);
         vm.prank(extraBidder);
-        usdc.approve(address(auctionManager), 100 * 1e6);
-        vm.prank(extraBidder);
-        auctionManager.placeBid(auctionId, 100 * 1e6, "extra-proposal");
+        auctionManager.placeBid{value: 100 * 1e6}(auctionId, "extra-proposal");
 
         vm.warp(block.timestamp + 2 days);
         auctionManager.closeBidding(auctionId);
@@ -81,9 +74,9 @@ contract PredictionMarketTest is Test, SigUtils {
         assertEq(nft.ownerOf(tokenId), publisher);
 
         // Fund bettors
-        usdc.mint(bettor1, 10000 * 1e6);
-        usdc.mint(bettor2, 10000 * 1e6);
-        usdc.mint(bettor3, 10000 * 1e6);
+        vm.deal(bettor1, 10000 * 1e6);
+        vm.deal(bettor2, 10000 * 1e6);
+        vm.deal(bettor3, 10000 * 1e6);
     }
 
     // ─── Market Creation ────────────────────────────────────────────────────
@@ -119,11 +112,9 @@ contract PredictionMarketTest is Test, SigUtils {
     function testPlaceBet() public {
         market = _createMarket();
 
-        uint256 betAmount = 1000 * 1e6; // 1000 USDC
+        uint256 betAmount = 1000 * 1e6; // 1000 native
         vm.prank(bettor1);
-        usdc.approve(address(market), betAmount);
-        vm.prank(bettor1);
-        market.placeBet(0, betAmount);
+        market.placeBet{value: betAmount}(0);
 
         // 5% fee = 50 USDC
         uint256 expectedFee = (betAmount * FEE_BPS) / 10000;
@@ -139,14 +130,10 @@ contract PredictionMarketTest is Test, SigUtils {
         market = _createMarket();
 
         vm.prank(bettor1);
-        usdc.approve(address(market), 1000 * 1e6);
-        vm.prank(bettor1);
-        market.placeBet(0, 1000 * 1e6); // Bet on "Yes"
+        market.placeBet{value: 1000 * 1e6}(0); // Bet on "Yes"
 
         vm.prank(bettor2);
-        usdc.approve(address(market), 500 * 1e6);
-        vm.prank(bettor2);
-        market.placeBet(1, 500 * 1e6);  // Bet on "No"
+        market.placeBet{value: 500 * 1e6}(1);  // Bet on "No"
 
         assertEq(market.optionPoolAmounts(0), 950 * 1e6);  // 1000 - 50
         assertEq(market.optionPoolAmounts(1), 475 * 1e6);  // 500 - 25
@@ -158,10 +145,8 @@ contract PredictionMarketTest is Test, SigUtils {
         market = _createMarket();
 
         vm.prank(bettor1);
-        usdc.approve(address(market), 1000 * 1e6);
-        vm.prank(bettor1);
         vm.expectRevert(PredictionMarket.InvalidOptionIndex.selector);
-        market.placeBet(99, 1000 * 1e6);
+        market.placeBet{value: 1000 * 1e6}(99);
     }
 
     function testPlaceBetZeroAmount() public {
@@ -169,7 +154,7 @@ contract PredictionMarketTest is Test, SigUtils {
 
         vm.prank(bettor1);
         vm.expectRevert(PredictionMarket.InvalidBetAmount.selector);
-        market.placeBet(0, 0);
+        market.placeBet{value: 0}(0);
     }
 
     function testPlaceBetAfterClose() public {
@@ -178,10 +163,8 @@ contract PredictionMarketTest is Test, SigUtils {
         vm.warp(block.timestamp + BET_DURATION + 1);
 
         vm.prank(bettor1);
-        usdc.approve(address(market), 1000 * 1e6);
-        vm.prank(bettor1);
         vm.expectRevert(PredictionMarket.BiddingClosed_.selector);
-        market.placeBet(0, 1000 * 1e6);
+        market.placeBet{value: 1000 * 1e6}(0);
     }
 
     // ─── Closing ─────────────────────────────────────────────────────────────
@@ -190,9 +173,7 @@ contract PredictionMarketTest is Test, SigUtils {
         market = _createMarket();
 
         vm.prank(bettor1);
-        usdc.approve(address(market), 1000 * 1e6);
-        vm.prank(bettor1);
-        market.placeBet(0, 1000 * 1e6);
+        market.placeBet{value: 1000 * 1e6}(0);
 
         vm.warp(block.timestamp + BET_DURATION + 1);
         market.closeBetting();
@@ -216,14 +197,10 @@ contract PredictionMarketTest is Test, SigUtils {
         market = _createMarket();
 
         vm.prank(bettor1);
-        usdc.approve(address(market), 1000 * 1e6);
-        vm.prank(bettor1);
-        market.placeBet(0, 1000 * 1e6); // "Yes"
+        market.placeBet{value: 1000 * 1e6}(0); // "Yes"
 
         vm.prank(bettor2);
-        usdc.approve(address(market), 500 * 1e6);
-        vm.prank(bettor2);
-        market.placeBet(1, 500 * 1e6);  // "No"
+        market.placeBet{value: 500 * 1e6}(1);  // "No"
 
         vm.warp(block.timestamp + BET_DURATION + 1);
         market.closeBetting();
@@ -333,8 +310,8 @@ contract PredictionMarketTest is Test, SigUtils {
         uint256 platformCut = (75 * 1e6 * PLATFORM_FEE_BPS) / 10000; // 10% of 75 = 7.5
         uint256 publisherCut = 75 * 1e6 - platformCut;
 
-        assertEq(usdc.balanceOf(platform), platformCut);
-        assertEq(usdc.balanceOf(address(nft)), publisherCut);
+        assertEq(platform.balance, platformCut);
+        assertEq(address(nft).balance, publisherCut);
     }
 
     function testClaimPublisherFeesNotNFTContract() public {
@@ -349,12 +326,12 @@ contract PredictionMarketTest is Test, SigUtils {
         market = _setupResolved(0);
 
         // The NFT contract's claimFees should work for the publisher
-        uint256 publisherBalanceBefore = usdc.balanceOf(publisher);
+        uint256 publisherBalanceBefore = publisher.balance;
 
         vm.prank(publisher);
         nft.claimFees(tokenId);
 
-        uint256 publisherBalanceAfter = usdc.balanceOf(publisher);
+        uint256 publisherBalanceAfter = publisher.balance;
         assertGt(publisherBalanceAfter, publisherBalanceBefore);
     }
 
@@ -370,19 +347,13 @@ contract PredictionMarketTest is Test, SigUtils {
 
         // Users bet
         vm.prank(bettor1);
-        usdc.approve(address(market), 2000 * 1e6);
-        vm.prank(bettor1);
-        market.placeBet(0, 2000 * 1e6); // "Yes"
+        market.placeBet{value: 2000 * 1e6}(0); // "Yes"
 
         vm.prank(bettor2);
-        usdc.approve(address(market), 800 * 1e6);
-        vm.prank(bettor2);
-        market.placeBet(1, 800 * 1e6);  // "No"
+        market.placeBet{value: 800 * 1e6}(1);  // "No"
 
         vm.prank(bettor3);
-        usdc.approve(address(market), 300 * 1e6);
-        vm.prank(bettor3);
-        market.placeBet(0, 300 * 1e6);  // "Yes"
+        market.placeBet{value: 300 * 1e6}(0);  // "Yes"
 
         // Close
         vm.warp(block.timestamp + BET_DURATION + 1);
@@ -407,6 +378,6 @@ contract PredictionMarketTest is Test, SigUtils {
         // platform cut = 155 * 10% = 15.5
         // publisher cut = 155 - 15.5 = 139.5 USDC
         assertEq(market.totalFeePool(), 0);
-        assertTrue(usdc.balanceOf(publisher) > 0);
+        assertTrue(publisher.balance > 0);
     }
 }
